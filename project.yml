@@ -1,0 +1,76 @@
+name: PhononVoice
+options:
+  bundleIdPrefix: com.mauriciabad
+  deploymentTarget:
+    macOS: "15.0"
+packages:
+  ptts:
+    path: vendor/xn-ptts
+settings:
+  base:
+    # Ad-hoc signed by default, so no Apple developer account is needed. install.sh passes
+    # SIGN_IDENTITY / DEVELOPMENT_TEAM through to override.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_VERSION: "5.0"
+    ARCHS: arm64
+    EXCLUDED_ARCHS: x86_64
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  PhononVoice:
+    type: application
+    platform: macOS
+    sources: [App]
+    settings:
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: PhononVoiceExtension
+    entitlements:
+      path: App/PhononVoice.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Phonon Voice
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: Phonon models by Gradium (CC BY-NC 4.0)
+  PhononVoiceExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - Extension
+      - path: voices.json
+        buildPhase: resources
+      - path: vendor/Models
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: ptts
+        product: ptts
+    entitlements:
+      path: Extension/PhononVoiceExtension.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        # Lets the sandbox load Apple's own voices, which read Catalan.
+        com.apple.security.temporary-exception.audio-unit-host: true
+    info:
+      path: Extension/Info.plist
+      properties:
+        CFBundleDisplayName: Phonon Voice
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.AudioUnit
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).AudioUnitFactory
+          NSExtensionAttributes:
+            AudioComponents:
+              # System Settings lists the voice under the part before the colon.
+              - name: "Phonon Voice: Phonon"
+                description: Phonon
+                manufacturer: PhVo
+                type: ausp
+                subtype: phnn
+                version: 1
+                sandboxSafe: true
+                tags: [Speech]

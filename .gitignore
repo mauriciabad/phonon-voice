@@ -1,0 +1,8 @@
+/vendor/
+/build/
+/PhononVoice.xcodeproj/
+/App/Info.plist
+/App/PhononVoice.entitlements
+/Extension/Info.plist
+/Extension/PhononVoiceExtension.entitlements
+.DS_Store
