@@ -66,48 +66,109 @@ actor Engine {
         _ = try await tts()
     }
 
-    /// Speak `text`, paragraph by paragraph, each in the voice for its language.
-    func speak(_ text: String, voice: String, onAudio: @escaping @Sendable ([Float]) -> Void) async throws {
-        for (language, part) in Self.split(text) {
+    /// Speak a request sentence by sentence, each in the voice for its paragraph's language, at
+    /// the requested speed. Before each sentence it reports a sentence marker, and after it word
+    /// markers spread over the sentence's audio by word length (Phonon gives no word timings).
+    func speak(
+        _ speech: SSML.Speech,
+        audio: @escaping @Sendable ([Float]) -> Void,
+        markers: @escaping @Sendable ([AVSpeechSynthesisMarker]) -> Void
+    ) async throws {
+        let sink = try AudioSink(rate: speech.rate, audio: audio)
+        let text = speech.text as NSString
+        for sentence in Self.sentences(in: speech.text) {
             try Task.checkCancellation()
-            if let (normalization, name) = Voices.phonon[language] {
-                let tts = try await tts()
-                if tts.language != normalization { try await tts.setLanguage(normalization) }
-                if tts.voice != name, tts.voices.contains(name) { try await tts.setVoice(name) }
-                try await tts.speak(part, onAudio: onAudio)
-            } else {
-                do {
-                    try await AppleVoice.speak(part, language: language, onAudio: onAudio)
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    // The closest Phonon voice beats silence.
-                    NSLog("PhononVoice: Apple voice for %@ failed (%@), using Spanish", language.rawValue, String(describing: error))
-                    let tts = try await tts()
-                    if tts.language != .spanish { try await tts.setLanguage(.spanish) }
-                    if tts.voice != "Nerea" { try await tts.setVoice("Nerea") }
-                    try await tts.speak(part, onAudio: onAudio)
-                }
+            let start = sink.position
+            var first = [AVSpeechSynthesisMarker(
+                markerType: .sentence, forTextRange: speech.ssmlRange(sentence.range),
+                atByteSampleOffset: sink.byteOffset(start))]
+            if sentence.startsParagraph {
+                first.insert(AVSpeechSynthesisMarker(
+                    markerType: .paragraph, forTextRange: speech.ssmlRange(sentence.paragraph),
+                    atByteSampleOffset: sink.byteOffset(start)), at: 0)
             }
+            markers(first)
+
+            try await say(text.substring(with: sentence.range), in: sentence.language, to: sink)
+
+            let words = Self.words(in: text.substring(with: sentence.range), at: sentence.range.location)
+            let total = Double(words.reduce(0) { $0 + $1.length + 1 })
+            var done = 0.0
+            let length = Double(sink.position - start)
+            markers(words.map { word in
+                defer { done += Double(word.length + 1) }
+                return AVSpeechSynthesisMarker(
+                    markerType: .word, forTextRange: speech.ssmlRange(word),
+                    atByteSampleOffset: sink.byteOffset(start + Int(length * done / max(total, 1))))
+            })
+        }
+        sink.finish()
+    }
+
+    private func say(_ text: String, in language: NLLanguage, to sink: AudioSink) async throws {
+        if let (normalization, name) = Voices.phonon[language] {
+            try await phonon(text, normalization, name, to: sink)
+            return
+        }
+        do {
+            try await AppleVoice.speak(text, language: language, onAudio: sink.write)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // The closest Phonon voice beats silence.
+            NSLog("PhononVoice: Apple voice for %@ failed (%@), using Spanish", language.rawValue, String(describing: error))
+            try await phonon(text, .spanish, Voices.phonon[.spanish]?.1 ?? "default", to: sink)
         }
     }
 
-    /// The text as runs of paragraphs in one language. Short paragraphs, which detect poorly,
-    /// take the language of the whole text.
-    static func split(_ text: String) -> [(NLLanguage, String)] {
+    private func phonon(_ text: String, _ normalization: Language, _ name: String, to sink: AudioSink) async throws {
+        let tts = try await tts()
+        if tts.language != normalization { try await tts.setLanguage(normalization) }
+        if tts.voice != name, tts.voices.contains(name) { try await tts.setVoice(name) }
+        try await tts.speak(text, onAudio: sink.write)
+    }
+
+    struct Sentence {
+        let range: NSRange
+        let paragraph: NSRange
+        let language: NLLanguage
+        let startsParagraph: Bool
+    }
+
+    /// The sentences of `text`, with the language of their paragraph. Short paragraphs, which
+    /// detect poorly, take the language of the whole text.
+    static func sentences(in text: String) -> [Sentence] {
+        let ns = text as NSString
         let whole = detect(text)
-        var runs: [(NLLanguage, String)] = []
-        for paragraph in text.components(separatedBy: .newlines) {
-            let p = paragraph.trimmingCharacters(in: .whitespaces)
-            guard !p.isEmpty else { continue }
-            let language = p.count >= 40 ? detect(p) : whole
-            if let last = runs.last, last.0 == language {
-                runs[runs.count - 1].1 += "\n" + p
-            } else {
-                runs.append((language, p))
+        var result: [Sentence] = []
+        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length), options: .byParagraphs) { paragraph, range, _, _ in
+            guard let paragraph, !paragraph.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            let language = paragraph.count >= 40 ? detect(paragraph) : whole
+            let tokenizer = NLTokenizer(unit: .sentence)
+            tokenizer.string = paragraph
+            var first = true
+            tokenizer.enumerateTokens(in: paragraph.startIndex..<paragraph.endIndex) { r, _ in
+                if !paragraph[r].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let local = NSRange(r, in: paragraph)
+                    result.append(Sentence(
+                        range: NSRange(location: range.location + local.location, length: local.length),
+                        paragraph: range, language: language, startsParagraph: first))
+                    first = false
+                }
+                return true
             }
         }
-        return runs
+        return result
+    }
+
+    /// The words of `sentence`, as ranges in the whole text (`sentence` starts at `offset`).
+    static func words(in sentence: String, at offset: Int) -> [NSRange] {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = sentence
+        return tokenizer.tokens(for: sentence.startIndex..<sentence.endIndex).map {
+            let r = NSRange($0, in: sentence)
+            return NSRange(location: offset + r.location, length: r.length)
+        }
     }
 
     static func detect(_ text: String) -> NLLanguage {

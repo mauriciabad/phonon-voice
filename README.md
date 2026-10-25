@@ -53,7 +53,8 @@ The app is a small host for an **Audio Unit speech synthesizer extension** (`AVS
 - `install.sh` exports Phonon 40m multilingual to Core ML with the voices from `voices.json`, using the exporter in [xn-ptts](https://github.com/gradium-ai/xn-ptts) (pinned to `v0.4.1`), and bundles it in the extension.
 - On first use, the extension compiles the models for your Mac, which takes about 10 s once. After that, loading takes well under a second.
 - [`Extension/Engine.swift`](Extension/Engine.swift) splits text into paragraphs, detects each one's language with Apple's NaturalLanguage framework, and switches Phonon's voice and text normalization to match. Text in a language Phonon doesn't speak goes to the best Apple voice for it.
-- [`Extension/PhononAudioUnit.swift`](Extension/PhononAudioUnit.swift) streams the generated audio to macOS as it is produced.
+- [`Extension/PhononAudioUnit.swift`](Extension/PhononAudioUnit.swift) streams the generated audio to macOS as it is produced, with sentence and word markers so the Speak Selection controller's skip buttons and word highlighting work.
+- [`Extension/AudioSink.swift`](Extension/AudioSink.swift) applies the speed macOS asks for (the controller's 1×/2× button and the speaking rate) by time-stretching the audio without changing its pitch.
 
 The Xcode project is generated from [`project.yml`](project.yml) by XcodeGen. To sign with your own certificate instead of ad hoc:
 

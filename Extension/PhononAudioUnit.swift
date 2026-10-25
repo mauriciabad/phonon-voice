@@ -3,7 +3,8 @@ import PhononTTS
 
 /// The system voice. macOS hands it one request at a time as SSML and pulls the audio through
 /// the render block, offline and as fast as it can, so the render block waits for generation
-/// instead of padding with silence.
+/// instead of padding with silence. Sentence and word markers tell macOS where each part of the
+/// text is in the audio, which its skip buttons and highlighting rely on.
 final class PhononAudioUnit: AVSpeechSynthesisProviderAudioUnit {
     private let format = AVAudioFormat(standardFormatWithSampleRate: Phonon.sampleRate, channels: 1)!
     private var busses: AUAudioUnitBusArray!
@@ -27,12 +28,15 @@ final class PhononAudioUnit: AVSpeechSynthesisProviderAudioUnit {
     override func synthesizeSpeechRequest(_ request: AVSpeechSynthesisProviderRequest) {
         task?.cancel()
         let generation = output.start()
-        let text = SSML.plainText(request.ssmlRepresentation)
-        let voice = request.voice.identifier
+        let speech = SSML.parse(request.ssmlRepresentation)
         let output = output
+        let report = speechSynthesisOutputMetadataBlock
         task = Task.detached {
             do {
-                try await Engine.shared.speak(text, voice: voice) { output.append($0, generation: generation) }
+                try await Engine.shared.speak(
+                    speech,
+                    audio: { output.append($0, generation: generation) },
+                    markers: { report?($0, request) })
             } catch {
                 NSLog("PhononVoice: %@", String(describing: error))
             }
@@ -125,13 +129,89 @@ final class SampleQueue: @unchecked Sendable {
 }
 
 enum SSML {
-    /// The text inside the SSML macOS sends, without tags and with entities decoded.
-    static func plainText(_ ssml: String) -> String {
-        var text = ssml.replacingOccurrences(of: "<break[^>]*>", with: ". ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-        for (entity, char) in ["&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&amp;": "&"] {
-            text = text.replacingOccurrences(of: entity, with: char)
+    /// What a request asks to say: its text without tags and with entities decoded, where each
+    /// UTF-16 unit of that text came from in the SSML (markers point into the SSML), and the speed.
+    struct Speech: Sendable {
+        var text = ""
+        var rate = 1.0
+        fileprivate var starts: [Int] = []
+        fileprivate var ends: [Int] = []
+
+        /// The SSML range a range of `text` came from.
+        func ssmlRange(_ range: NSRange) -> NSRange {
+            guard range.length > 0, range.location < starts.count else { return NSRange(location: 0, length: 0) }
+            let start = starts[range.location]
+            let end = ends[min(range.location + range.length, ends.count) - 1]
+            return NSRange(location: start, length: end - start)
         }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func parse(_ ssml: String) -> Speech {
+        let u = Array(ssml.utf16)
+        var speech = Speech()
+        var text: [UInt16] = []
+        func add(_ s: String, from start: Int, to end: Int) {
+            for unit in s.utf16 {
+                text.append(unit)
+                speech.starts.append(start)
+                speech.ends.append(end)
+            }
+        }
+        var i = 0
+        while i < u.count {
+            switch u[i] {
+            case 0x3C: // <
+                let end = u[i...].firstIndex(of: 0x3E) ?? u.count - 1
+                let tag = String(decoding: u[i...end], as: UTF16.self)
+                if tag.hasPrefix("<break") { add(" ", from: i, to: end + 1) }
+                if tag.hasPrefix("<prosody"), speech.rate == 1, let rate = rate(tag) { speech.rate = rate }
+                i = end + 1
+            case 0x26: // &
+                if let end = u[i...].prefix(10).firstIndex(of: 0x3B) {
+                    let entity = String(decoding: u[i...end], as: UTF16.self)
+                    let names = ["&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&amp;": "&"]
+                    if let char = names[entity] ?? numeric(entity) {
+                        add(char, from: i, to: end + 1)
+                        i = end + 1
+                        continue
+                    }
+                }
+                add("&", from: i, to: i + 1)
+                i += 1
+            default:
+                text.append(u[i])
+                speech.starts.append(i)
+                speech.ends.append(i + 1)
+                i += 1
+            }
+        }
+        speech.text = String(decoding: text, as: UTF16.self)
+        return speech
+    }
+
+    private static func numeric(_ entity: String) -> String? {
+        guard entity.hasPrefix("&#") else { return nil }
+        let body = entity.dropFirst(2).dropLast()
+        let value = body.hasPrefix("x") ? UInt32(body.dropFirst(), radix: 16) : UInt32(body)
+        return value.flatMap(Unicode.Scalar.init).map { String(Character($0)) }
+    }
+
+    /// The speed multiplier for a `<prosody rate="…">` tag. macOS sends percentages that grow
+    /// with the square of the speed it means: its "2×" button sends 400%, the slowest setting 12.5%.
+    private static func rate(_ tag: String) -> Double? {
+        guard let open = tag.range(of: "rate=\""),
+              let close = tag[open.upperBound...].firstIndex(of: "\"")
+        else { return nil }
+        let value = tag[open.upperBound..<close].trimmingCharacters(in: .whitespaces)
+        let named = ["x-slow": 0.5, "slow": 0.75, "medium": 1, "default": 1, "fast": 1.5, "x-fast": 2]
+        let speed: Double?
+        if let n = named[value] {
+            speed = n
+        } else if value.hasSuffix("%"), let percent = Double(value.dropLast()) {
+            speed = (percent / 100).squareRoot()
+        } else {
+            speed = Double(value)
+        }
+        return speed.map { min(max($0, 0.25), 4) }
     }
 }
