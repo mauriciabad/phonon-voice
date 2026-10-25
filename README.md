@@ -19,35 +19,20 @@ Use [Phonon](https://github.com/gradium-ai/xn-ptts), Gradium's on-device text-to
 > [!NOTE]
 > This is an unofficial community project. It is not made or endorsed by Gradium.
 
-## Requirements
-
-- A Mac with Apple silicon, on macOS 15 or later (tested on macOS 27)
-- [Xcode](https://apps.apple.com/app/xcode/id497799835), opened once
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen) and Rust: `brew install xcodegen rustup && rustup default stable`
-- A free [Hugging Face](https://huggingface.co) account. The Phonon model is gated, so you accept its terms once.
-
-No Apple developer account is needed. The app is signed ad hoc for your own Mac.
-
 ## Install
 
-1. Accept the model's terms at [huggingface.co/gradium/phonon-40m-multilingual](https://huggingface.co/gradium/phonon-40m-multilingual) (approval is instant).
-2. Create a **Read** token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) and log in with it:
-   ```sh
-   uvx --from huggingface_hub hf auth login
-   ```
-   (or `export HF_TOKEN=hf_...`)
-3. Build and install:
-   ```sh
-   git clone https://github.com/mauriciabad/phonon-voice
-   cd phonon-voice
-   ./install.sh
-   ```
-   The first run takes a few minutes: it downloads the model (~120 MB), compiles the exporter, converts the model for the Neural Engine, and builds the app into `/Applications/Phonon Voice.app`.
-4. Turn it on in **System Settings → Accessibility → Read & Speak** (called *Spoken Content* before macOS 27):
-   - **System voice** → under English (United States), **Phonon Voice** → **Phonon** (shown as *Phonon Voice (Phonon)* once selected)
-   - Turn off **Detect languages**. Phonon detects the language itself; with this on, macOS sends non-English text to its own voices instead.
+You need a Mac with Apple silicon on macOS 15 or later (tested on macOS 27), [Xcode](https://apps.apple.com/app/xcode/id497799835), and [Homebrew](https://brew.sh). No Apple developer account is needed.
 
-Then select text anywhere and press **⌥Esc**. You can also try the voice in the Phonon Voice app, which has a text box and a button that opens these settings.
+1. Run this in Terminal:
+   ```sh
+   zsh -c "$(curl -fsSL https://raw.githubusercontent.com/mauriciabad/phonon-voice/main/install.sh)"
+   ```
+   It installs the tools it needs, asks you to log in to [Hugging Face](https://huggingface.co) and accept the Phonon model's terms (free, in your browser), then builds the app into `/Applications`. The first run takes a few minutes.
+2. In the **Read & Speak** settings it opens at the end (System Settings → Accessibility; called *Spoken Content* before macOS 27):
+   - Set **System voice** to **Phonon Voice → Phonon**, under English (United States).
+   - Turn off **Detect languages**. Phonon detects the language itself; with this on, macOS sends non-English text to its own voices.
+
+Then select text anywhere and press **⌥Esc**.
 
 The first time you read **Catalan**, macOS asks whether to "lower the security settings" for PhononVoiceExtension. That prompt is about loading Apple's own Catalan voice from inside the sandboxed extension. Allow it to hear Montse; if you cancel, Catalan is read by the Spanish voice instead.
 
@@ -59,7 +44,7 @@ Phonon's [voice catalog](https://huggingface.co/gradium/phonon-voices) has dozen
 ptts --list-voices
 ```
 
-Edit [`voices.json`](voices.json) with the name and ID of the voice you want for each language, then run `./install.sh` again. An entry without an `id` uses the model's default voice. Languages Phonon supports: `en`, `es`, `fr`, `de`, `pt`.
+Clone this repository, edit [`voices.json`](voices.json) with the name and ID of the voice you want for each language, and run `./install.sh` from the clone. An entry without an `id` uses the model's default voice. Languages Phonon supports: `en`, `es`, `fr`, `de`, `pt`.
 
 ## How it works
 
@@ -79,10 +64,10 @@ SIGN_IDENTITY="Apple Development" DEVELOPMENT_TEAM=YOURTEAMID ./install.sh
 ## Uninstall
 
 ```sh
-./uninstall.sh
+zsh -c "$(curl -fsSL https://raw.githubusercontent.com/mauriciabad/phonon-voice/main/uninstall.sh)"
 ```
 
-Then pick another System voice in Read & Speak.
+Then pick another System voice in Read & Speak. To update, run the install command again.
 
 ## License
 
